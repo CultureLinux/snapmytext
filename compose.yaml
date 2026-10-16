@@ -1,0 +1,21 @@
+services:
+  ocr:
+    build: .
+    image: light-ocr:local
+    container_name: light-ocr
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      OMP_THREAD_LIMIT: "1"
+      OCR_MAX_CONCURRENT: "1"
+    cpus: 1.0
+    mem_limit: 512m
+    pids_limit: 64
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
