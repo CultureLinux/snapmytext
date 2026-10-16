@@ -1,3 +1,6 @@
 .git
-*.zip
+.github
+.gocache
+.gomodcache
 README.md
+compose.yaml

@@ -19,7 +19,7 @@ COPY web/ ./web/
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -trimpath \
     -ldflags="-s -w" \
-    -o /light-ocr .
+    -o /snapmytext .
 
 # ==================================================
 # RUNTIME : Debian + Tesseract Best
@@ -46,10 +46,10 @@ RUN apt-get update && \
     && apt-get purge -y --auto-remove curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=build /light-ocr /usr/local/bin/light-ocr
+COPY --from=build /snapmytext /usr/local/bin/snapmytext
 
 USER 65534:65534
 
 EXPOSE 8080
 
-ENTRYPOINT ["/usr/local/bin/light-ocr"]
+ENTRYPOINT ["/usr/local/bin/snapmytext"]

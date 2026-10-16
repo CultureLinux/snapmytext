@@ -1,4 +1,4 @@
-module light-ocr
+module snapmytext
 
 go 1.26.0
 

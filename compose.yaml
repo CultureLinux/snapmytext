@@ -1,11 +1,11 @@
 services:
   ocr:
     build: .
-    image: light-ocr:local
-    container_name: light-ocr
+    image: clinuxfr/snapmytext:local
+    container_name: snapmytext
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     environment:
       OMP_THREAD_LIMIT: "1"
       OCR_MAX_CONCURRENT: "1"

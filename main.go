@@ -1,25 +1,26 @@
 package main
 
 import (
-    "context"
-    "embed"
-    "encoding/json"
-    "errors"
-    "fmt"
-    "image"
-    _ "image/jpeg"
-    "image/png"
-    "io"
-    "log"
-    "net/http"
-    "os"
-    "os/exec"
-    "path/filepath"
-    "strconv"
-    "strings"
-    "time"
+	"context"
+	"embed"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"image"
+	_ "image/jpeg"
+	"image/png"
+	"io"
+	"io/fs"
+	"log"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
 
-    "golang.org/x/image/draw"
+	"golang.org/x/image/draw"
 )
 
 //go:embed web/*
@@ -47,55 +48,55 @@ func env(k, fallback string) string {
 	return fallback
 }
 func upscaleForOCR(inputPath string, width, height int) (string, error) {
-    // Heuristique initiale pour les petites captures.
-    if width >= 1200 {
-        return inputPath, nil
-    }
+	// Heuristique initiale pour les petites captures.
+	if width >= 1200 {
+		return inputPath, nil
+	}
 
-    // Évite de dépasser 12 MP après agrandissement.
-    if int64(width)*int64(height)*4 > 12_000_000 {
-        return inputPath, nil
-    }
+	// Évite de dépasser 12 MP après agrandissement.
+	if int64(width)*int64(height)*4 > 12_000_000 {
+		return inputPath, nil
+	}
 
-    f, err := os.Open(inputPath)
-    if err != nil {
-        return "", err
-    }
-    defer f.Close()
+	f, err := os.Open(inputPath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
 
-    src, _, err := image.Decode(f)
-    if err != nil {
-        return "", err
-    }
+	src, _, err := image.Decode(f)
+	if err != nil {
+		return "", err
+	}
 
-    dst := image.NewRGBA(image.Rect(0, 0, width*2, height*2))
+	dst := image.NewRGBA(image.Rect(0, 0, width*2, height*2))
 
-    // Interpolation Catmull-Rom pour le texte.
-    draw.CatmullRom.Scale(
-        dst, dst.Bounds(),
-        src, src.Bounds(),
-        draw.Over, nil,
-    )
+	// Interpolation Catmull-Rom pour le texte.
+	draw.CatmullRom.Scale(
+		dst, dst.Bounds(),
+		src, src.Bounds(),
+		draw.Over, nil,
+	)
 
-    out, err := os.CreateTemp("", "ocr-upscaled-*.png")
-    if err != nil {
-        return "", err
-    }
+	out, err := os.CreateTemp("", "ocr-upscaled-*.png")
+	if err != nil {
+		return "", err
+	}
 
-    path := out.Name()
+	path := out.Name()
 
-    if err := png.Encode(out, dst); err != nil {
-        out.Close()
-        os.Remove(path)
-        return "", err
-    }
+	if err := png.Encode(out, dst); err != nil {
+		out.Close()
+		os.Remove(path)
+		return "", err
+	}
 
-    if err := out.Close(); err != nil {
-        os.Remove(path)
-        return "", err
-    }
+	if err := out.Close(); err != nil {
+		os.Remove(path)
+		return "", err
+	}
 
-    return path, nil
+	return path, nil
 }
 func main() {
 	limit, err := strconv.Atoi(env("OCR_MAX_CONCURRENT", "1"))
@@ -104,7 +105,11 @@ func main() {
 	}
 	queue := make(chan struct{}, limit)
 	mux := http.NewServeMux()
-	mux.Handle("GET /", http.FileServer(http.FS(assets)))
+	webAssets, err := fs.Sub(assets, "web")
+	if err != nil {
+		log.Fatal(err)
+	}
+	mux.Handle("GET /", http.FileServer(http.FS(webAssets)))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	mux.HandleFunc("POST /api/ocr", func(w http.ResponseWriter, r *http.Request) {
 		select {
@@ -170,6 +175,10 @@ func main() {
 		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 		defer cancel()
 		ocrPath, err := upscaleForOCR(name, cfg.Width, cfg.Height)
+		if err != nil {
+			send(w, 500, response{Error: "Image preprocessing failed."})
+			return
+		}
 		if ocrPath != name {
 			log.Printf(
 				"OCR upscale: %dx%d -> %dx%d",
@@ -186,11 +195,6 @@ func main() {
 				cfg.Height,
 			)
 		}
-		if err != nil {
-			send(w, 500, response{Error: "Échec du prétraitement."})
-			return
-		}
-
 		cmd := exec.CommandContext(
 			ctx,
 			"tesseract",
@@ -219,7 +223,14 @@ func main() {
 		}
 		send(w, 200, response{Text: strings.TrimSpace(string(output)), DurationMS: time.Since(start).Milliseconds()})
 	})
-	server := &http.Server{Addr: ":8080", Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 35 * time.Second, IdleTimeout: 60 * time.Second}
-	fmt.Println("Light OCR listening on :8080")
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+		mux.ServeHTTP(w, r)
+	})
+	server := &http.Server{Addr: ":8080", Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 35 * time.Second, IdleTimeout: 60 * time.Second}
+	fmt.Println("SnapMyText listening on :8080")
 	log.Fatal(server.ListenAndServe())
 }
